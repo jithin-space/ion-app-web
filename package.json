@@ -33,14 +33,18 @@
     "webpack-dev-server": "3.11.3"
   },
   "dependencies": {
+    "@hotosm/id": "^2.20.2",
     "antd": "^3.26.16",
     "copy-webpack-plugin": "^5.0.5",
     "ion-sdk-js": "^1.8.1",
+    "lodash.debounce": "^4.0.8",
     "mdi-react": "^6.4.0",
     "react": "^16.8.6",
     "react-dom": "^16.8.6",
     "react-mdi": "^0.5.7",
+    "react-redux": "^7.2.6",
     "react-router": "^5.0.1",
+    "react-router-dom": "^6.2.1",
     "reactjs-localstorage": "1.0.1"
   },
   "keywords": [
