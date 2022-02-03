@@ -4,4 +4,18 @@ import App from "./App";
 import "antd/dist/antd.css";
 import "../styles/css/styles.scss";
 
-ReactDOM.render( <App />, document.getElementById("app"));
+// ID Integration
+import { Provider } from 'react-redux';
+import { store } from './store';
+
+ReactDOM.render(
+    <React.StrictMode>
+      <Provider store={store}>
+        <App />
+      </Provider>
+    </React.StrictMode>,
+    document.getElementById('root')
+  );
+  
+//End Integration
+
