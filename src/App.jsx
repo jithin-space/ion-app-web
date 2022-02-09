@@ -79,7 +79,7 @@ function App(props) {
   const iDContext = useSelector((state) => state.editor.context);
   const [mapObj, setMapObj] = useState({
     zoom: 4,
-    center: [21.82, 71.81]
+    center: [21.82, 71.81],
   });
   const windowInit = typeof window !== undefined;
   const [background, setBackground] = useState(
@@ -145,6 +145,25 @@ function App(props) {
         iDContext.init();
       }
 
+      async function sentSyncRequest() {
+        // Initial Background Layer Synchronization is not possible
+        // unless all imageries are loaded which is async. Hence this code
+        await iDContext.background().ensureLoaded();
+        let info = reactLocalStorage.getObject("loginInfo");
+        if (!sync.current) {
+          //send sync request;
+          var data = {
+            uid: uid,
+            name: loginInfo.displayName,
+          };
+          let map = new Map();
+          map.set("msg", data);
+          console.log("sending sync-request", data);
+          room.message(info.roomId, "sync-request", "all", "Map", map);
+        }
+      }
+
+      sentSyncRequest();
 
       window.addEventListener("storage", () => {
         let info = reactLocalStorage.getObject("loginInfo");
@@ -161,7 +180,6 @@ function App(props) {
         map.set("msg", data);
         room.message(info.roomId, "drawchange", "all", "Map", map);
       });
-
     }
   }, [iDContext, login]);
 
@@ -173,12 +191,8 @@ function App(props) {
       let temp = hk.split("=");
       params[temp[0]] = temp[1];
     });
-    if (
-      params.background &&
-      sync.current === true
-    ) {
+    if (params.background && sync.current === true) {
       setBackground(params.background);
-      //changeBackground(params.background);
     }
   };
 
@@ -186,7 +200,10 @@ function App(props) {
     if (sync.current) {
       let info = reactLocalStorage.getObject("loginInfo");
       let mapCenter = iDContext.map().center();
-      if (mapObj['center'][0] !== mapCenter[0] || mapObj['center'][1] !== mapCenter[1]) {
+      if (
+        mapObj["center"][0] !== mapCenter[0] ||
+        mapObj["center"][1] !== mapCenter[1]
+      ) {
         var data = {
           uid: uid,
           name: loginInfo.displayName,
@@ -198,29 +215,17 @@ function App(props) {
         room.message(info.roomId, "hashchange", "all", "Map", map);
       }
     }
-    else if(sync.current === false){
-      let info = reactLocalStorage.getObject("loginInfo");
-        var data = {
-          uid: uid,
-          name: loginInfo.displayName,
-          text: [mapObj, background],
-        };
-        let map = new Map();
-        map.set("msg", data);
-        room.message(info.roomId, "syncbak", "all", "Map", map);
-    }
-  }, 500);
+  }, 100);
 
   useEffect(() => {
     if (iDContext) {
-      iDContext.map().zoom(mapObj['zoom']);
-      iDContext.map().center(mapObj['center']);
+      iDContext.map().zoom(mapObj["zoom"]);
+      iDContext.map().center(mapObj["center"]);
       iDContext.map().on("move", mapMoveHandler);
       return () => {
         iDContext.map().on("move", null);
-      }
+      };
     }
-
   }, [mapObj]);
 
   useEffect(() => {
@@ -233,14 +238,14 @@ function App(props) {
         text: [background],
       };
       map.set("msg", data);
+      console.log("triggering bgchange", background);
       room.message(info.roomId, "bgChange", "all", "Map", map);
     }
 
-      window.addEventListener("hashchange",checkBackgroundChange);
-      return () => {
-        window.removeEventListener("hashchange", checkBackgroundChange);
-      };
-
+    window.addEventListener("hashchange", checkBackgroundChange);
+    return () => {
+      window.removeEventListener("hashchange", checkBackgroundChange);
+    };
   }, [background]);
 
   // End Integration
@@ -282,25 +287,6 @@ function App(props) {
           "peer => " + ev.peer.displayname + ", join!"
         );
         onSystemMessage(ev.peer.displayname + ", join!");
-
-        //ID Integration
-        // send sync message if already syncd
-        let info = reactLocalStorage.getObject("loginInfo");
-        if (sync.current) {
-          var data = {
-            uid: uid,
-            name: loginInfo.displayName,
-            text: [
-              iDContext.map().zoom(),
-              iDContext.map().center(),
-              iDContext.background().baseLayerSource().id,
-            ],
-          };
-          let map = new Map();
-          map.set("msg", data);
-          room.message(info.roomId, "sync", "all", "Map", map);
-        }
-        //End Integration
       } else if (ev.state == Ion.PeerState.LEAVE) {
         notificationTip(
           "Peer Leave",
@@ -335,42 +321,49 @@ function App(props) {
       let _messages = messages;
 
       //ID Integration
-      if (msg.from === "sync") {
-        // if it is already synced,discard this message
-        if (!sync.current) {
-          let data = json.msg.text;
-          console.log("r synced data", data);
+
+      let info = reactLocalStorage.getObject("loginInfo");
+
+      if ((msg.from === "sync-request") & sync.current) {
+        // eligible for sending sync response
+        var data = {
+          uid: uid,
+          name: loginInfo.displayName,
+          text: [
+            json.msg.uid,
+            iDContext.map().zoom(),
+            iDContext.map().center(),
+            iDContext.background().baseLayerSource().id,
+          ],
+        };
+        let map = new Map();
+        map.set("msg", data);
+        room.message(info.roomId, "sync-response", "all", "Map", map);
+      } else if ((msg.from === "sync-response") & !sync.current) {
+        let data = json.msg.text;
+        // check if it is resulted from his/hers request
+        console.log("capturing response", data);
+        if (uid === data[0]) {
           setMapObj({
-            zoom: data[0],
-            center: data[1],
+            zoom: data[1],
+            center: data[2],
           });
-          setBackground(data[2]);
-          changeBackground(data[2]);
-          
-          console.log('completed seting background & changeBackground', data[2]);
-          // sync.current = false;
-        }
-      } 
-      else if( msg.from === "syncbak"){
-        if (sync.current === false){
-          let data = json.msg.text;
+          setBackground(data[3]);
+          changeBackground(data[3]);
           sync.current = true;
-          setMapObj(data[0]);
-          changeBackground(data[1]);
-        } 
-      }
-      else if (msg.from === "hashchange") {
+        }
+      } else if (msg.from === "hashchange") {
         let data = json.msg.text;
         let m_uid = json.msg.uid;
         let mapCenter = iDContext.map().center();
         if (
           m_uid !== uid &&
-          mapCenter[0] !== mapObj['center'][0] &&
-          mapCenter[1] !== mapObj['center'][1]
+          mapCenter[0] !== mapObj["center"][0] &&
+          mapCenter[1] !== mapObj["center"][1]
         ) {
           setMapObj({
             zoom: data[0],
-            center: data[1]
+            center: data[1],
           });
         }
       } else if (msg.from === "drawchange") {
@@ -392,23 +385,23 @@ function App(props) {
       } else if (msg.from === "bgChange") {
         let data = json.msg.text;
         let m_uid = json.msg.uid;
-        if(m_uid !== uid ){
+        if (m_uid !== uid || sync.current === false) {
           changeBackground(data[0]);
         }
       }
       //End Integration
-      else if (uid != msg.from) {
-        let _uid = 1;
+      // else if (uid != msg.from) {
+      //   let _uid = 1;
 
-        _messages.push(
-          new Message({
-            id: _uid,
-            message: json.msg.text,
-            senderName: json.msg.name,
-          })
-        );
-        setMessages([..._messages]);
-      }
+      //   _messages.push(
+      //     new Message({
+      //       id: _uid,
+      //       message: json.msg.text,
+      //       senderName: json.msg.name,
+      //     })
+      //   );
+      //   setMessages([..._messages]);
+      // }
     };
 
     room
@@ -480,24 +473,16 @@ function App(props) {
     };
   };
 
-
   const changeBackground = (bg) => {
-
-      // change background for sync is called before useeffect
-      if (iDContext.ui() === undefined) {
-        console.log('working');
-        iDContext.init();
-      }
-
+    // change background for sync is called before useeffect
     if (bg) {
-      
       let d = iDContext.background().findSource(bg);
 
       console.log(iDContext);
       console.log(iDContext.background);
       console.log(bg);
-      console.log(iDContext.background().findSource('Bing'));
-      console.log('d is ', d);
+      console.log(iDContext.background().findSource("Bing"));
+      console.log("d is ", d);
 
       //it won't work while sync
       if (d && d.id) {
