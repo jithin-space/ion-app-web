@@ -44,6 +44,15 @@ import { v4 as uuidv4 } from "uuid";
 
 const ForwardRefConference = forwardRef(Conference);
 
+function useStateRef(initialValue) {
+  const [value, setValue] = useState(initialValue);
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return [value, setValue, ref];
+}
+
 function App(props) {
   const conference = useRef(null);
 
@@ -68,9 +77,14 @@ function App(props) {
   //ID Integration
   const sync = useRef(false);
   const iDContext = useSelector((state) => state.editor.context);
-  const [zoom, setZoom] = useState(4);
-  const [center, setCenter] = useState([21.82, 71.81]);
+  const [mapObj, setMapObj] = useState({
+    zoom: 4,
+    center: [21.82, 71.81]
+  });
   const windowInit = typeof window !== undefined;
+  const [background, setBackground] = useState(
+    localStorage.getItem("background-last-used") || "Bing"
+  );
   const dispatch = useDispatch();
 
   //End Integration
@@ -131,28 +145,6 @@ function App(props) {
         iDContext.init();
       }
 
-      iDContext.map().on(
-        "move",
-        debounce(() => {
-          console.log("working");
-          if (sync.current) {
-            let info = reactLocalStorage.getObject("loginInfo");
-
-            let mapCenter = iDContext.map().center();
-            if (center[0] !== mapCenter[0] || center[1] !== mapCenter[1]) {
-              var data = {
-                uid: uid,
-                name: loginInfo.displayName,
-                text: [iDContext.map().zoom(), iDContext.map().center()],
-              };
-
-              let map = new Map();
-              map.set("msg", data);
-              room.message(info.roomId, "hashchange", "all", "Map", map);
-            }
-          }
-        }, 500)
-      );
 
       window.addEventListener("storage", () => {
         let info = reactLocalStorage.getObject("loginInfo");
@@ -169,15 +161,87 @@ function App(props) {
         map.set("msg", data);
         room.message(info.roomId, "drawchange", "all", "Map", map);
       });
+
     }
   }, [iDContext, login]);
 
+  const checkBackgroundChange = () => {
+    var hash = window.location.hash.substring(1);
+
+    var params = {};
+    hash.split("&").map((hk) => {
+      let temp = hk.split("=");
+      params[temp[0]] = temp[1];
+    });
+    if (
+      params.background &&
+      sync.current === true
+    ) {
+      setBackground(params.background);
+      //changeBackground(params.background);
+    }
+  };
+
+  const mapMoveHandler = debounce(() => {
+    if (sync.current) {
+      let info = reactLocalStorage.getObject("loginInfo");
+      let mapCenter = iDContext.map().center();
+      if (mapObj['center'][0] !== mapCenter[0] || mapObj['center'][1] !== mapCenter[1]) {
+        var data = {
+          uid: uid,
+          name: loginInfo.displayName,
+          text: [iDContext.map().zoom(), iDContext.map().center()],
+        };
+
+        let map = new Map();
+        map.set("msg", data);
+        room.message(info.roomId, "hashchange", "all", "Map", map);
+      }
+    }
+    else if(sync.current === false){
+      let info = reactLocalStorage.getObject("loginInfo");
+        var data = {
+          uid: uid,
+          name: loginInfo.displayName,
+          text: [mapObj, background],
+        };
+        let map = new Map();
+        map.set("msg", data);
+        room.message(info.roomId, "syncbak", "all", "Map", map);
+    }
+  }, 500);
+
   useEffect(() => {
     if (iDContext) {
-      iDContext.map().zoom(zoom);
-      iDContext.map().center(center);
+      iDContext.map().zoom(mapObj['zoom']);
+      iDContext.map().center(mapObj['center']);
+      iDContext.map().on("move", mapMoveHandler);
+      return () => {
+        iDContext.map().on("move", null);
+      }
     }
-  }, [zoom, center]);
+
+  }, [mapObj]);
+
+  useEffect(() => {
+    if (room && sync.current !== null) {
+      let info = reactLocalStorage.getObject("loginInfo");
+      let map = new Map();
+      let data = {
+        uid: uid,
+        name: loginInfo.displayName,
+        text: [background],
+      };
+      map.set("msg", data);
+      room.message(info.roomId, "bgChange", "all", "Map", map);
+    }
+
+      window.addEventListener("hashchange",checkBackgroundChange);
+      return () => {
+        window.removeEventListener("hashchange", checkBackgroundChange);
+      };
+
+  }, [background]);
 
   // End Integration
   const notificationTip = (message, description) => {
@@ -189,6 +253,7 @@ function App(props) {
   };
 
   const handleJoin = async (values) => {
+    sync.current = null;
     setLoading(true);
     // open chat window
     // openOrCloseLeftContainer(!collapsed);
@@ -196,7 +261,6 @@ function App(props) {
       window.location.protocol + "//" + window.location.hostname + ":" + "5551";
     // Note if you're running this inside docker you'll need to remove the ":5551" and possibly add the following line so that caddy can proxy correctly
     // ":" + window.location.port;
-    console.log("Connect url:" + url);
     let connector = new Ion.Connector(url, "token");
     setConnector(connector);
 
@@ -206,24 +270,12 @@ function App(props) {
     setRTC(rtc);
 
     room.onjoin = (success, reason) => {
-      console.log("onjoin: success=", success, ", reason=", reason);
       onJoin(values, sid, uid);
     };
 
-    room.onleave = (reason) => {
-      console.log("onleave: ", reason);
-    };
+    room.onleave = (reason) => {};
 
     room.onpeerevent = (ev) => {
-      console.log(
-        "[onpeerevent]: state = ",
-        ev.state,
-        ", peer = ",
-        ev.peer.uid,
-        ", name = ",
-        ev.peer.displayname
-      );
-
       if (ev.state == Ion.PeerState.JOIN) {
         notificationTip(
           "Peer Join",
@@ -238,11 +290,15 @@ function App(props) {
           var data = {
             uid: uid,
             name: loginInfo.displayName,
-            text: [iDContext.map().zoom(), iDContext.map().center()],
+            text: [
+              iDContext.map().zoom(),
+              iDContext.map().center(),
+              iDContext.background().baseLayerSource().id,
+            ],
           };
-        let map = new Map();
-        map.set("msg", data);
-        room.message(info.roomId, "sync", "all", "Map", map);
+          let map = new Map();
+          map.set("msg", data);
+          room.message(info.roomId, "sync", "all", "Map", map);
         }
         //End Integration
       } else if (ev.state == Ion.PeerState.LEAVE) {
@@ -269,7 +325,6 @@ function App(props) {
       if (!find) {
         _peers.push(peerInfo);
       }
-      console.log("setPeers peers= ", peers);
       setPeers([..._peers]);
     };
 
@@ -277,53 +332,68 @@ function App(props) {
       const uint8Arr = new Uint8Array(msg.data);
       const decodedString = String.fromCharCode.apply(null, uint8Arr);
       const json = JSON.parse(decodedString);
-      console.log("onmessage msg= ", msg, "json= ", json);
       let _messages = messages;
 
-      console.log('working for sender too');
-      console.log(msg);
       //ID Integration
       if (msg.from === "sync") {
         // if it is already synced,discard this message
-        console.log("sync coming");
         if (!sync.current) {
-          console.log("I need to sync");
           let data = json.msg.text;
-          setZoom(data[0]);
-          setCenter(data[1]);
-          sync.current = true;
+          console.log("r synced data", data);
+          setMapObj({
+            zoom: data[0],
+            center: data[1],
+          });
+          setBackground(data[2]);
+          changeBackground(data[2]);
+          
+          console.log('completed seting background & changeBackground', data[2]);
+          // sync.current = false;
         }
-      } else if (msg.from === "hashchange") {
+      } 
+      else if( msg.from === "syncbak"){
+        if (sync.current === false){
+          let data = json.msg.text;
+          sync.current = true;
+          setMapObj(data[0]);
+          changeBackground(data[1]);
+        } 
+      }
+      else if (msg.from === "hashchange") {
         let data = json.msg.text;
         let m_uid = json.msg.uid;
         let mapCenter = iDContext.map().center();
         if (
           m_uid !== uid &&
-          mapCenter[0] !== center[0] &&
-          mapCenter[1] !== center[1]
+          mapCenter[0] !== mapObj['center'][0] &&
+          mapCenter[1] !== mapObj['center'][1]
         ) {
-          setZoom(data[0]);
-          setCenter(data[1]);
+          setMapObj({
+            zoom: data[0],
+            center: data[1]
+          });
         }
       } else if (msg.from === "drawchange") {
-
-        console.log('working drawchange');
+        if (sync.current === false) sync.current = true;
         let data = json.msg.text[0];
-        console.log(data);
         if (!data || data === null) {
-          console.log('working');
           localStorage.setItem(
             `iD_${window.location.origin}_saved_history`,
             null
           );
           iDContext.history().reset();
         } else {
-          console.log(`iD_${window.location.origin}_saved_history`);
           localStorage.setItem(
             `iD_${window.location.origin}_saved_history`,
             data
           );
           iDContext.history().restore();
+        }
+      } else if (msg.from === "bgChange") {
+        let data = json.msg.text;
+        let m_uid = json.msg.uid;
+        if(m_uid !== uid ){
+          changeBackground(data[0]);
         }
       }
       //End Integration
@@ -337,23 +407,8 @@ function App(props) {
             senderName: json.msg.name,
           })
         );
-        console.log("setMessages msg= ", _messages);
         setMessages([..._messages]);
       }
-      // ID Integration chat fix
-      
-      else if (uid == msg.from) {
-
-        console.log('working');
-        let _uid = 0;
-        _messages.push(new Message({ id: _uid, message: json.msg.text, senderName: "me" }));
-        setMessages([..._messages])
-      }
-      else {
-
-        console.log('wokkkking');
-      }
-      // end integration;
     };
 
     room
@@ -423,6 +478,38 @@ function App(props) {
     window.onunload = async () => {
       await cleanUp();
     };
+  };
+
+
+  const changeBackground = (bg) => {
+
+      // change background for sync is called before useeffect
+      if (iDContext.ui() === undefined) {
+        console.log('working');
+        iDContext.init();
+      }
+
+    if (bg) {
+      
+      let d = iDContext.background().findSource(bg);
+
+      console.log(iDContext);
+      console.log(iDContext.background);
+      console.log(bg);
+      console.log(iDContext.background().findSource('Bing'));
+      console.log('d is ', d);
+
+      //it won't work while sync
+      if (d && d.id) {
+        let previousBackground = iDContext.background().baseLayerSource();
+        localStorage.setItem(
+          "background-last-used-toggle",
+          previousBackground.id
+        );
+        localStorage.setItem("background-last-used", d.id);
+        iDContext.background().baseLayerSource(d);
+      }
+    }
   };
 
   const onJoin = async (values, sid, uid) => {
@@ -596,7 +683,9 @@ function App(props) {
         <div className="app-header-left">
           <a href="https://cfc.net.in" target="_blank">
             {/* <img src={pionLogo} className="app-logo-img" /> */}
-            <Text type="danger" style={{ fontSize: "2em"}}>MapScreenShare</Text>
+            <Text type="danger" style={{ fontSize: "2em" }}>
+              MapScreenShare
+            </Text>
           </a>
         </div>
         {login ? (
@@ -763,7 +852,7 @@ function App(props) {
         <Footer className=".app-footer">
           Powered by{" "}
           <a href="https://cfc.net.in" target="_blank">
-           CFC 
+            CFC
           </a>{" "}
           WebRTC.
         </Footer>
