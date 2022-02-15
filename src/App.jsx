@@ -35,12 +35,14 @@ import { useSelector, useDispatch } from "react-redux";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import OauthLogin from "./OauthLogin";
 import debounce from "lodash.debounce";
+import ParticipantDialog from "./participants";
 // End Integration
 
 import LoginForm from "./LoginForm";
 import Conference from "./Conference";
 import * as Ion from "ion-sdk-js/lib/connector";
 import { v4 as uuidv4 } from "uuid";
+import { UpdatePeerReply } from "ion-sdk-js/lib/_library/apps/room/proto/room_pb";
 
 const ForwardRefConference = forwardRef(Conference);
 
@@ -158,7 +160,6 @@ function App(props) {
           };
           let map = new Map();
           map.set("msg", data);
-          console.log("sending sync-request", data);
           room.message(info.roomId, "sync-request", "all", "Map", map);
         }
       }
@@ -238,7 +239,6 @@ function App(props) {
         text: [background],
       };
       map.set("msg", data);
-      console.log("triggering bgchange", background);
       room.message(info.roomId, "bgChange", "all", "Map", map);
     }
 
@@ -248,6 +248,14 @@ function App(props) {
     };
   }, [background]);
 
+  useEffect(() => {
+    if (room && sync.current !== null) {
+      room.onpeerevent = handlePeerEvent;
+      return () => {
+      room.onpeerevent = null;
+      }
+    }
+  }, [peers]);
   // End Integration
   const notificationTip = (message, description) => {
     notification.info({
@@ -257,15 +265,63 @@ function App(props) {
     });
   };
 
+  const handlePeerEvent = (ev) => {
+    if (ev.state == Ion.PeerState.JOIN) {
+      notificationTip(
+        "Peer Join",
+        "peer => " + ev.peer.displayname + ", join!"
+      );
+      onSystemMessage(ev.peer.displayname + ", join!");
+    } else if (ev.state == Ion.PeerState.LEAVE) {
+      console.log("ev", ev);
+      notificationTip(
+        "Peer Leave",
+        "peer => " + ev.peer.displayname + ", leave!"
+      );
+      onSystemMessage(ev.peer.displayname + ", leave!");
+    }
+
+    let peerInfo = {
+      uid: ev.peer.uid,
+      name: ev.peer.displayname,
+      state: ev.state,
+    };
+    let _peers = peers;
+    let find = false;
+
+    console.log(peers, "working");
+    _peers.forEach((item) => {
+      if (item.uid == ev.peer.uid) {
+        item = peerInfo;
+        find = true;
+      }
+    });
+    console.log(ev);
+    console.log(_peers);
+    if (!find) {
+      _peers.push(peerInfo);
+    }
+    //ID Integration
+    else {
+      _peers = _peers.filter((item) => item.uid !== ev.peer.uid);
+    }
+    // end integration
+    setPeers([..._peers]);
+  };
+
   const handleJoin = async (values) => {
     sync.current = null;
     setLoading(true);
     // open chat window
     // openOrCloseLeftContainer(!collapsed);
     let url =
-      window.location.protocol + "//" + window.location.hostname + ":" + "5551";
-    // Note if you're running this inside docker you'll need to remove the ":5551" and possibly add the following line so that caddy can proxy correctly
-    // ":" + window.location.port;
+      window.location.protocol +
+      "//" +
+      window.location.hostname +
+      //":" + "5551";
+      // Note if you're running this inside docker you'll need to remove the ":5551" and possibly add the following line so that caddy can proxy correctly
+      ":" +
+      window.location.port;
     let connector = new Ion.Connector(url, "token");
     setConnector(connector);
 
@@ -280,39 +336,7 @@ function App(props) {
 
     room.onleave = (reason) => {};
 
-    room.onpeerevent = (ev) => {
-      if (ev.state == Ion.PeerState.JOIN) {
-        notificationTip(
-          "Peer Join",
-          "peer => " + ev.peer.displayname + ", join!"
-        );
-        onSystemMessage(ev.peer.displayname + ", join!");
-      } else if (ev.state == Ion.PeerState.LEAVE) {
-        notificationTip(
-          "Peer Leave",
-          "peer => " + ev.peer.displayname + ", leave!"
-        );
-        onSystemMessage(ev.peer.displayname + ", leave!");
-      }
-
-      let peerInfo = {
-        uid: ev.peer.uid,
-        name: ev.peer.displayname,
-        state: ev.state,
-      };
-      let _peers = peers;
-      let find = false;
-      _peers.forEach((item) => {
-        if (item.uid == ev.peer.uid) {
-          item = peerInfo;
-          find = true;
-        }
-      });
-      if (!find) {
-        _peers.push(peerInfo);
-      }
-      setPeers([..._peers]);
-    };
+    room.onpeerevent = handlePeerEvent;
 
     room.onmessage = (msg) => {
       const uint8Arr = new Uint8Array(msg.data);
@@ -342,7 +366,6 @@ function App(props) {
       } else if ((msg.from === "sync-response") & !sync.current) {
         let data = json.msg.text;
         // check if it is resulted from his/hers request
-        console.log("capturing response", data);
         if (uid === data[0]) {
           setMapObj({
             zoom: data[1],
@@ -388,20 +411,28 @@ function App(props) {
         if (m_uid !== uid || sync.current === false) {
           changeBackground(data[0]);
         }
+      } else if (msg.from === "audio-change") {
+        console.log("capturing audio -change");
+        let data = json.msg.text;
+        let m_uid = json.msg.uid;
+        if (uid !== m_uid) {
+          console.log(data[0]);
+          updatePeer(m_uid, data[0]);
+        }
       }
       //End Integration
-      // else if (uid != msg.from) {
-      //   let _uid = 1;
+      else if (uid != msg.from) {
+        let _uid = 1;
 
-      //   _messages.push(
-      //     new Message({
-      //       id: _uid,
-      //       message: json.msg.text,
-      //       senderName: json.msg.name,
-      //     })
-      //   );
-      //   setMessages([..._messages]);
-      // }
+        _messages.push(
+          new Message({
+            id: _uid,
+            message: json.msg.text,
+            senderName: json.msg.name,
+          })
+        );
+        setMessages([..._messages]);
+      }
     };
 
     room
@@ -477,14 +508,6 @@ function App(props) {
     // change background for sync is called before useeffect
     if (bg) {
       let d = iDContext.background().findSource(bg);
-
-      console.log(iDContext);
-      console.log(iDContext.background);
-      console.log(bg);
-      console.log(iDContext.background().findSource("Bing"));
-      console.log("d is ", d);
-
-      //it won't work while sync
       if (d && d.id) {
         let previousBackground = iDContext.background().baseLayerSource();
         localStorage.setItem(
@@ -508,7 +531,8 @@ function App(props) {
     setLoginInfo(values);
     setLocalVideoEnabled(!values.audioOnly);
 
-    // conference.current.handleLocalStream(true);
+    // commmented for id integration
+    conference.current.handleLocalStream(true);
 
     notificationTip(
       "Connected!",
@@ -531,6 +555,21 @@ function App(props) {
     // End Integraion
   };
 
+  //ID Integration
+  const updatePeer = (uid, status) => {
+    let _peers = peers;
+    let index = _peers.findIndex((item) => item.uid === uid);
+    if (index !== -1) {
+      let peerInfo = _peers[index];
+      peerInfo.audioStatus = status;
+      _peers.splice(index, 1);
+      _peers.push(peerInfo);
+      setPeers([..._peers]);
+    }
+  };
+
+  // End Integration
+
   const handleLeave = async () => {
     confirm({
       title: "Leave Now?",
@@ -548,6 +587,21 @@ function App(props) {
   const handleAudioTrackEnabled = (enabled) => {
     setLocalAudioEnabled(enabled);
     conference.current.muteMediaTrack("audio", enabled);
+
+    // ID Integration
+    let info = reactLocalStorage.getObject("loginInfo");
+    //send sync request;
+    var data = {
+      uid: uid,
+      name: loginInfo.displayName,
+      text: [enabled],
+    };
+    let map = new Map();
+    map.set("msg", data);
+
+    console.log("sending audio change");
+    room.message(info.roomId, "audio-change", "all", "Map", map);
+    // End Integration
   };
 
   const handleVideoTrackEnabled = (enabled) => {
@@ -675,7 +729,7 @@ function App(props) {
         </div>
         {login ? (
           <div className="app-header-tool">
-            {/* <Tooltip title="Mute/Cancel">
+            <Tooltip title="Mute/Cancel">
               <Button
                 ghost
                 size="large"
@@ -691,6 +745,7 @@ function App(props) {
                 />
               </Button>
             </Tooltip>
+
             <Tooltip title="Open/Close video">
               <Button
                 ghost
@@ -735,17 +790,17 @@ function App(props) {
                   style={{ display: "flex", justifyContent: "center" }}
                 />
               </Button>
-            </Tooltip> */}
+            </Tooltip>
             <ToolShare loginInfo={loginInfo} />
           </div>
         ) : (
           <div />
         )}
         <div className="app-header-right">
-          {/* <MediaSettings
+          <MediaSettings
             onMediaSettingsChanged={onMediaSettingsChanged}
             settings={settings}
-          /> */}
+          />
         </div>
       </Header>
 
@@ -768,12 +823,17 @@ function App(props) {
               collapsed={collapsed}
             >
               <div className="left-container">
-                <ChatFeed messages={messages} onSendMessage={onSendMessage} />
+                <ParticipantDialog
+                  loginInfo={loginInfo}
+                  peers={peers}
+                  audioStatus={localAudioEnabled}
+                />
+                {/* <ChatFeed messages={messages} onSendMessage={onSendMessage} /> */}
               </div>
             </Sider>
             <Layout className="app-right-layout">
               <Content style={{ flex: 1 }}>
-                {/* <ForwardRefConference
+                <ForwardRefConference
                   uid={uid}
                   sid={sid}
                   collapsed={collapsed}
@@ -787,8 +847,8 @@ function App(props) {
                   screenSharingClick={onScreenSharingClick}
                   vidFit={vidFit}
                   ref={conference}
-                /> */}
-                <div className="w-100 vh-minus-77-ns" id="id-container"></div>
+                />
+                {/* <div className="w-100 vh-minus-77-ns" id="id-container"></div> */}
               </Content>
               <div className="app-collapsed-button">
                 <Tooltip title="Open/Close chat panel">

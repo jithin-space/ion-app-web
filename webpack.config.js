@@ -68,14 +68,24 @@ module.exports = (env) => {
   devServer: {
     hot: true,
     disableHostCheck: true,
+    host: '192.168.1.10',
+    https: true,
     proxy: {
+      '/room.RoomSignal/Signal': {
+         target: 'ws://mss.cfc.net.in:5551',
+         ws: true,
+      },
+      '/rtc.RTC/Signal' : {
+         target: 'ws://mss.cfc.net.in:5551',
+         ws: true,
+      },
       '/biz.Biz/Signal': {
-         target: 'ws://localhost:5551',
-         ws: true
+         target: 'ws://mss.cfc.net.in:5551',
+         ws: true,
       },
       '/sfu.SFU/Signal': {
-         target: 'ws://localhost:5551',
-         ws: true
+         target: 'ws://mss.cfc.net.in:5551',
+         ws: true,
       },
     },
   }
