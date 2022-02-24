@@ -45,8 +45,6 @@ export default function ParticipantDialog(props) {
 
   
   useEffect(() => {
-
-    console.log('working');
     setMembers([
       {
         uid: "123",

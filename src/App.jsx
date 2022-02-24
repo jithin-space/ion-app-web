@@ -33,7 +33,6 @@ import * as iD from "@hotosm/id/dist/iD.js";
 import "@hotosm/id/dist/iD.css";
 import { useSelector, useDispatch } from "react-redux";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
-import OauthLogin from "./OauthLogin";
 import debounce from "lodash.debounce";
 import ParticipantDialog from "./participants";
 // End Integration
@@ -42,7 +41,6 @@ import LoginForm from "./LoginForm";
 import Conference from "./Conference";
 import * as Ion from "ion-sdk-js/lib/connector";
 import { v4 as uuidv4 } from "uuid";
-import { UpdatePeerReply } from "ion-sdk-js/lib/_library/apps/room/proto/room_pb";
 
 const ForwardRefConference = forwardRef(Conference);
 
@@ -79,6 +77,7 @@ function App(props) {
   //ID Integration
   const sync = useRef(false);
   const iDContext = useSelector((state) => state.editor.context);
+  // TODO: Set Default Location To Kerala With a Higher Zoom Level
   const [mapObj, setMapObj] = useState({
     zoom: 4,
     center: [21.82, 71.81],
@@ -151,59 +150,152 @@ function App(props) {
         // Initial Background Layer Synchronization is not possible
         // unless all imageries are loaded which is async. Hence this code
         await iDContext.background().ensureLoaded();
-        let info = reactLocalStorage.getObject("loginInfo");
         if (!sync.current) {
           //send sync request;
-          var data = {
+          let data = {
             uid: uid,
-            name: loginInfo.displayName,
+            name: "sync-message",
           };
-          let map = new Map();
-          map.set("msg", data);
-          room.message(info.roomId, "sync-request", "all", "Map", map);
+          sentMessage(room, data, 'sync-request');
         }
       }
 
       sentSyncRequest();
 
+      /**
+       * Listening to the localstorage change is the key
+       * of replicating drawing changes to remote
+       * Event is manually dispatched from the core iD Code
+       */
+
       window.addEventListener("storage", () => {
-        let info = reactLocalStorage.getObject("loginInfo");
-        var history = localStorage.getItem(
+        let history = localStorage.getItem(
           `iD_${window.location.origin}_saved_history`
         );
-        var data = {
-          uid: uid,
-          name: loginInfo.displayName,
-          text: [history],
-        };
 
-        let map = new Map();
-        map.set("msg", data);
-        room.message(info.roomId, "drawchange", "all", "Map", map);
+        // Prevent triggering while drawing a line or area
+        if (
+          iDContext.mode().id !== "draw-line" &&
+          iDContext.mode().id !== "draw-area"
+        ) {
+          let selectedIDs = iDContext.selectedIDs();
+          let data = {
+            uid: uid,
+            name: "sync-message",
+            text: [
+              history,
+              iDContext.map().zoom(),
+              iDContext.map().center(),
+              selectedIDs,
+            ],
+          };
+          sentMessage(room, data, "drawchange");
+        }
       });
+
+      // Button Click Handling
+      // TODO: Better mode change detection should be identified
+      document.addEventListener("click", handleButtonClick);
+
+      // listens for window.history.replaceState call in the iD Core Code
+      // Event is manually dispatched from the core iD Code
+      // Responsible for replicating selection of items on the map
+      window.onpopstate = checkElementSelected;
     }
   }, [iDContext, login]);
 
-  const checkBackgroundChange = () => {
-    var hash = window.location.hash.substring(1);
+  const sentMessage = (room, data, action) => {
+    if (room) {
+      //console.log('entering', action, room, data);
+      let info = reactLocalStorage.getObject("loginInfo");
+      let map = new Map();
+      map.set("msg", data);
+      room.message(info.roomId, action, "all", "Map", map);
+    }
+  };
 
-    var params = {};
+  const checkElementSelected = () => {
+    let hash = window.location.hash.substring(1);
+    let params = {};
+
+    hash.split("&").map((hk) => {
+      let temp = hk.split("=");
+      params[temp[0]] = temp[1];
+    });
+
+    // if id is present in the hash , it means one item is selected
+    if (params.id && sync.current === true) {
+      let selectedIDs = iDContext.selectedIDs();
+      let mode = iDContext.mode().id;
+      var data = {
+        uid: uid,
+        name: "sync-message",
+        text: [selectedIDs, mode],
+      };
+
+      sentMessage(room, data, "select-change");
+    }
+  };
+
+  const handleButtonClick = (event) => {
+    let element = event.target;
+
+    // Many times click will be triggered on inner button elements
+    // Hence the parent traversal
+    let parent = event.target.closest("button");
+    if (
+      (element &&
+        element.tagName === "BUTTON" &&
+        element.classList.contains("add-button")) ||
+      (parent &&
+        parent.tagName === "BUTTON" &&
+        parent.classList.contains("add-button"))
+    ) {
+      let data = {
+        uid: uid,
+        name: "sync-message",
+        text: [
+          element.tagName === "BUTTON"
+            ? element["__data__"]["id"]
+            : parent["__data__"]["id"],
+        ],
+      };
+
+      sentMessage(room, data, "mode-change");
+    }
+  };
+
+  /**
+   * Layer Change Detection
+   * Which is also identified during a change
+   * in hash occurs
+   */
+  const checkBackgroundChange = () => {
+    let hash = window.location.hash.substring(1);
+    let params = {};
     hash.split("&").map((hk) => {
       let temp = hk.split("=");
       params[temp[0]] = temp[1];
     });
     if (params.background && sync.current === true) {
+      // setBackground inturn triggers the message to remote
       setBackground(params.background);
     }
   };
 
+  /**
+   * Map Movement Detection
+   * Debounce is used to prevent triggering immediate map movements
+   */
   const mapMoveHandler = debounce(() => {
     if (sync.current) {
       let info = reactLocalStorage.getObject("loginInfo");
       let mapCenter = iDContext.map().center();
+      let mapZoom = iDContext.map().zoom();
       if (
         mapObj["center"][0] !== mapCenter[0] ||
-        mapObj["center"][1] !== mapCenter[1]
+        mapObj["center"][1] !== mapCenter[1] ||
+        mapObj["zoom"] !== mapZoom
       ) {
         var data = {
           uid: uid,
@@ -211,13 +303,32 @@ function App(props) {
           text: [iDContext.map().zoom(), iDContext.map().center()],
         };
 
-        let map = new Map();
-        map.set("msg", data);
-        room.message(info.roomId, "hashchange", "all", "Map", map);
+        sentMessage(room, data, "hashchange");
       }
     }
-  }, 100);
+  }, 500);
 
+  /**
+   * Triggers when background layer is changed
+   * @param {*} bg 
+   */
+  const changeBackground = (bg) => {
+    // change background for sync is called before useeffect
+    if (bg) {
+      let d = iDContext.background().findSource(bg);
+      if (d && d.id) {
+        let previousBackground = iDContext.background().baseLayerSource();
+        localStorage.setItem(
+          "background-last-used-toggle",
+          previousBackground.id
+        );
+        localStorage.setItem("background-last-used", d.id);
+        iDContext.background().baseLayerSource(d);
+      }
+    }
+  };
+
+  // updating the map when mapObj changes
   useEffect(() => {
     if (iDContext) {
       iDContext.map().zoom(mapObj["zoom"]);
@@ -229,19 +340,20 @@ function App(props) {
     }
   }, [mapObj]);
 
+  // when background is set , triggers bgchange event in the remote
   useEffect(() => {
     if (room && sync.current !== null) {
-      let info = reactLocalStorage.getObject("loginInfo");
-      let map = new Map();
       let data = {
         uid: uid,
-        name: loginInfo.displayName,
+        name: "sync-message",
         text: [background],
       };
-      map.set("msg", data);
-      room.message(info.roomId, "bgChange", "all", "Map", map);
+      sentMessage(room, data, "bgChange");
     }
 
+    // essential for the listeners to remain uptodate
+    // else state variables inside lister functions will use
+    // the value at the time of registering the event
     window.addEventListener("hashchange", checkBackgroundChange);
     return () => {
       window.removeEventListener("hashchange", checkBackgroundChange);
@@ -252,8 +364,8 @@ function App(props) {
     if (room && sync.current !== null) {
       room.onpeerevent = handlePeerEvent;
       return () => {
-      room.onpeerevent = null;
-      }
+        room.onpeerevent = null;
+      };
     }
   }, [peers]);
   // End Integration
@@ -273,7 +385,6 @@ function App(props) {
       );
       onSystemMessage(ev.peer.displayname + ", join!");
     } else if (ev.state == Ion.PeerState.LEAVE) {
-      console.log("ev", ev);
       notificationTip(
         "Peer Leave",
         "peer => " + ev.peer.displayname + ", leave!"
@@ -289,19 +400,17 @@ function App(props) {
     let _peers = peers;
     let find = false;
 
-    console.log(peers, "working");
     _peers.forEach((item) => {
       if (item.uid == ev.peer.uid) {
         item = peerInfo;
         find = true;
       }
     });
-    console.log(ev);
-    console.log(_peers);
     if (!find) {
       _peers.push(peerInfo);
     }
     //ID Integration
+    // Update the peer when someone left the room
     else {
       _peers = _peers.filter((item) => item.uid !== ev.peer.uid);
     }
@@ -343,85 +452,113 @@ function App(props) {
       const decodedString = String.fromCharCode.apply(null, uint8Arr);
       const json = JSON.parse(decodedString);
       let _messages = messages;
+      let data = json.msg.text;
+      let m_uid = json.msg.uid;
 
       //ID Integration
 
-      let info = reactLocalStorage.getObject("loginInfo");
+      switch (msg.from) {
+        case "sync-request":
+          if (sync.current) {
+            let response_data = {
+              uid: uid,
+              name: loginInfo.displayName,
+              text: [
+                json.msg.uid,
+                iDContext.map().zoom(),
+                iDContext.map().center(),
+                iDContext.background().baseLayerSource().id,
+              ],
+            };
+            sentMessage(room, response_data, "sync-response");
+          }
+          break;
+        case "sync-response":
+          if (!sync.current && uid === data[0]) {
+            setMapObj({
+              zoom: data[1],
+              center: data[2],
+            });
+            setBackground(data[3]);
+            changeBackground(data[3]);
+            sync.current = true;
+          }
+          break;
+        case "hashchange":
+          let mapCenter = iDContext.map().center();
+          let mapZoom = iDContext.map().zoom();
+          if (
+            m_uid !== uid &&
+            mapCenter[0] !== mapObj["center"][0] &&
+            mapCenter[1] !== mapObj["center"][1] &&
+            mapZoom !== mapObj["zoom"]
+          ) {
+            setMapObj({
+              zoom: data[0],
+              center: data[1],
+            });
+          }
+          break;
+        case "drawchange":
+          if (m_uid !== uid) {
+            let iDs = iDContext.selectedIDs();
+            if (!data[0] || data[0] === null) {
+              if (iDs && iDs.length > 0) {
+                // last change deleted which needs to reflect here
+                window.iD.operationDelete(iDContext, iDs)();
+                // iDContext.flush();
+              }
+              localStorage.removeItem(
+                `iD_${window.location.origin}_saved_history`
+              );
+              iDContext.history().restore();
+              iDContext.enter(window.iD.modeBrowse(iDContext));
+            } else {
+              localStorage.setItem(
+                `iD_${window.location.origin}_saved_history`,
+                data[0]
+              );
+              setMapObj({
+                zoom: data[1],
+                center: data[2],
+              });
+              if (data[3]) {
+                iDContext.history().restore();
+                iDContext.enter(
+                  window.iD.modeSelect(iDContext, data[3]).newFeature(true)
+                );
+              }
+            }
+          }
 
-      if ((msg.from === "sync-request") & sync.current) {
-        // eligible for sending sync response
-        var data = {
-          uid: uid,
-          name: loginInfo.displayName,
-          text: [
-            json.msg.uid,
-            iDContext.map().zoom(),
-            iDContext.map().center(),
-            iDContext.background().baseLayerSource().id,
-          ],
-        };
-        let map = new Map();
-        map.set("msg", data);
-        room.message(info.roomId, "sync-response", "all", "Map", map);
-      } else if ((msg.from === "sync-response") & !sync.current) {
-        let data = json.msg.text;
-        // check if it is resulted from his/hers request
-        if (uid === data[0]) {
-          setMapObj({
-            zoom: data[1],
-            center: data[2],
-          });
-          setBackground(data[3]);
-          changeBackground(data[3]);
-          sync.current = true;
-        }
-      } else if (msg.from === "hashchange") {
-        let data = json.msg.text;
-        let m_uid = json.msg.uid;
-        let mapCenter = iDContext.map().center();
-        if (
-          m_uid !== uid &&
-          mapCenter[0] !== mapObj["center"][0] &&
-          mapCenter[1] !== mapObj["center"][1]
-        ) {
-          setMapObj({
-            zoom: data[0],
-            center: data[1],
-          });
-        }
-      } else if (msg.from === "drawchange") {
-        if (sync.current === false) sync.current = true;
-        let data = json.msg.text[0];
-        if (!data || data === null) {
-          localStorage.setItem(
-            `iD_${window.location.origin}_saved_history`,
-            null
-          );
-          iDContext.history().reset();
-        } else {
-          localStorage.setItem(
-            `iD_${window.location.origin}_saved_history`,
-            data
-          );
-          iDContext.history().restore();
-        }
-      } else if (msg.from === "bgChange") {
-        let data = json.msg.text;
-        let m_uid = json.msg.uid;
-        if (m_uid !== uid || sync.current === false) {
-          changeBackground(data[0]);
-        }
-      } else if (msg.from === "audio-change") {
-        console.log("capturing audio -change");
-        let data = json.msg.text;
-        let m_uid = json.msg.uid;
-        if (uid !== m_uid) {
-          console.log(data[0]);
-          updatePeer(m_uid, data[0]);
-        }
+          break;
+        case "bgChange":
+          if (m_uid !== uid || sync.current === false) {
+            changeBackground(data[0]);
+          }
+          break;
+        case "audio-change":
+          if (uid !== m_uid) {
+            updatePeer(m_uid, data[0]);
+          }
+          break;
+        case "mode-change":
+          if (m_uid !== uid && sync.current) {
+            document
+              .querySelector("." + data[0])
+              .dispatchEvent(new Event("click"));
+          }
+          break;
+        case "select-change":
+          if (m_uid !== uid && sync.current) {
+            if (data[1] === "select") {
+              iDContext.enter(window.iD.modeSelect(iDContext, data[0]));
+            }
+          }
+          break;
       }
       //End Integration
-      else if (uid != msg.from) {
+      if (uid != msg.from) {
         let _uid = 1;
 
         _messages.push(
@@ -452,35 +589,36 @@ function App(props) {
         ""
       )
       .then((result) => {
-        console.log(
-          "[join] result: success " +
-            result?.success +
-            ", room info: " +
-            JSON.stringify(result?.room)
-        );
+        // console.log(
+        //   "[join] result: success " +
+        //     result?.success +
+        //     ", room info: " +
+        //     JSON.stringify(result?.room)
+        // );
 
         if (!result?.success) {
-          console.log("[join] failed: " + result?.reason);
+          // console.log("[join] failed: " + result?.reason);
           return;
         }
 
         rtc.ontrackevent = function (ev) {
-          console.log(
-            "[ontrackevent]: \nuid = ",
-            ev.uid,
-            " \nstate = ",
-            ev.state,
-            ", \ntracks = ",
-            JSON.stringify(ev.tracks)
-          );
+          // console.log(
+          //   "[ontrackevent]: \nuid = ",
+          //   ev.uid,
+          //   " \nstate = ",
+          //   ev.state,
+          //   ", \ntracks = ",
+          //   JSON.stringify(ev.tracks)
+          // );
           let _peers = peers;
           _peers.forEach((item) => {
             ev.tracks.forEach((track) => {
-              if (item.uid == ev.uid && track.kind == "video") {
-                console.log("track=", track);
+              // if (item.uid == ev.uid && track.kind == "video") {
+              if (item.uid == ev.uid && track.kind == "audio") {
+                // console.log("track=", track);
                 // item["id"] = JSON.stringify(ev.tracks)[0].id;
                 item["id"] = track.stream_id;
-                console.log("ev.streams[0].id:::" + item["id"]);
+                // console.log("ev.streams[0].id:::" + item["id"]);
               }
             });
           });
@@ -489,14 +627,14 @@ function App(props) {
         };
 
         rtc.ondatachannel = ({ channel }) => {
-          console.log("[ondatachannel] channel=", channel);
+          //console.log("[ondatachannel] channel=", channel);
           channel.onmessage = ({ data }) => {
-            console.log("[ondatachannel] channel onmessage =", data);
+            //console.log("[ondatachannel] channel onmessage =", data);
           };
         };
 
         rtc.join(values.roomId, uid);
-        console.log("rtc.join");
+        //console.log("rtc.join");
       });
 
     window.onunload = async () => {
@@ -504,21 +642,6 @@ function App(props) {
     };
   };
 
-  const changeBackground = (bg) => {
-    // change background for sync is called before useeffect
-    if (bg) {
-      let d = iDContext.background().findSource(bg);
-      if (d && d.id) {
-        let previousBackground = iDContext.background().baseLayerSource();
-        localStorage.setItem(
-          "background-last-used-toggle",
-          previousBackground.id
-        );
-        localStorage.setItem("background-last-used", d.id);
-        iDContext.background().baseLayerSource(d);
-      }
-    }
-  };
 
   const onJoin = async (values, sid, uid) => {
     reactLocalStorage.remove("loginInfo");
@@ -529,8 +652,9 @@ function App(props) {
     setSid(sid);
     setUid(uid);
     setLoginInfo(values);
-    setLocalVideoEnabled(!values.audioOnly);
 
+    //setLocalVideoEnabled(!values.audioOnly);
+    setLocalVideoEnabled(false);
     // commmented for id integration
     conference.current.handleLocalStream(true);
 
@@ -549,6 +673,7 @@ function App(props) {
     setTimeout(() => {
       if (peers.length === 0 && !sync.current) {
         sync.current = true;
+        console.log("synced");
       }
     }, 2000);
 
@@ -589,18 +714,12 @@ function App(props) {
     conference.current.muteMediaTrack("audio", enabled);
 
     // ID Integration
-    let info = reactLocalStorage.getObject("loginInfo");
-    //send sync request;
     var data = {
       uid: uid,
       name: loginInfo.displayName,
       text: [enabled],
     };
-    let map = new Map();
-    map.set("msg", data);
-
-    console.log("sending audio change");
-    room.message(info.roomId, "audio-change", "all", "Map", map);
+    sentMessage(room, data, "audio-change");
     // End Integration
   };
 
@@ -720,7 +839,7 @@ function App(props) {
     <Layout className="app-layout">
       <Header className="app-header">
         <div className="app-header-left">
-          <a href="https://cfc.net.in" target="_blank">
+          <a href="https://mss.cfc.net.in" target="_blank">
             {/* <img src={pionLogo} className="app-logo-img" /> */}
             <Text type="danger" style={{ fontSize: "2em" }}>
               MapScreenShare
@@ -746,7 +865,7 @@ function App(props) {
               </Button>
             </Tooltip>
 
-            <Tooltip title="Open/Close video">
+            {/* <Tooltip title="Open/Close video">
               <Button
                 ghost
                 size="large"
@@ -759,7 +878,7 @@ function App(props) {
                   style={{ display: "flex", justifyContent: "center" }}
                 />
               </Button>
-            </Tooltip>
+            </Tooltip> */}
             <Tooltip title="Hangup">
               <Button
                 shape="circle"
@@ -775,7 +894,7 @@ function App(props) {
                 />
               </Button>
             </Tooltip>
-            <Tooltip title="Share desktop">
+            {/* <Tooltip title="Share desktop">
               <Button
                 ghost
                 size="large"
@@ -790,27 +909,20 @@ function App(props) {
                   style={{ display: "flex", justifyContent: "center" }}
                 />
               </Button>
-            </Tooltip>
+            </Tooltip> */}
             <ToolShare loginInfo={loginInfo} />
           </div>
         ) : (
           <div />
         )}
         <div className="app-header-right">
-          <MediaSettings
+          {/* <MediaSettings
             onMediaSettingsChanged={onMediaSettingsChanged}
             settings={settings}
-          />
+          /> */}
         </div>
       </Header>
 
-      {/* ID Integration */}
-      <BrowserRouter>
-        <Routes>
-          <Route path="/land.html" element={<OauthLogin />} />
-        </Routes>
-      </BrowserRouter>
-      {/* End Integration  */}
       <Content className="app-center-layout">
         {login ? (
           <Layout className="app-content-layout">
@@ -848,7 +960,8 @@ function App(props) {
                   vidFit={vidFit}
                   ref={conference}
                 />
-                {/* <div className="w-100 vh-minus-77-ns" id="id-container"></div> */}
+                {/* iDContainer */}
+                <div className="w-100 vh-minus-77-ns" id="id-container"></div>
               </Content>
               <div className="app-collapsed-button">
                 <Tooltip title="Open/Close chat panel">
@@ -896,7 +1009,7 @@ function App(props) {
       {!login && (
         <Footer className=".app-footer">
           Powered by{" "}
-          <a href="https://cfc.net.in" target="_blank">
+          <a href="https://mss.cfc.net.in" target="_blank">
             CFC
           </a>{" "}
           WebRTC.
