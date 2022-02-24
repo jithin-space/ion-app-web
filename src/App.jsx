@@ -201,6 +201,7 @@ function App(props) {
       // Event is manually dispatched from the core iD Code
       // Responsible for replicating selection of items on the map
       window.onpopstate = checkElementSelected;
+
     }
   }, [iDContext, login]);
 
@@ -262,6 +263,25 @@ function App(props) {
       };
 
       sentMessage(room, data, "mode-change");
+    }
+
+    else if(
+      (element &&
+        element.tagName === "BUTTON" &&
+        element.classList.contains("save")) ||
+      (parent &&
+        parent.tagName === "BUTTON" &&
+        parent.classList.contains("save"))
+    ) {
+
+      let data = {
+        uid: uid,
+        name: "sync-message",
+        text: [
+        ],
+      };
+
+      sentMessage(room, data, "save-trigger");
     }
   };
 
@@ -556,6 +576,22 @@ function App(props) {
             }
           }
           break;
+        case "save-trigger":
+          if (m_uid !== uid && sync.current) {
+
+              iDContext.flush();
+              localStorage.removeItem(
+                `iD_${window.location.origin}_saved_history`
+              );
+              iDContext.history().restore();
+              iDContext.enter(window.iD.modeBrowse(iDContext));
+              notificationTip(
+              "Clearing Changes",
+              "Remote is trying to save the data. Please wait"
+              );
+          }
+          break;
+
       }
       //End Integration
       if (uid != msg.from) {
