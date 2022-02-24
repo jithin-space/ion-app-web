@@ -13,7 +13,7 @@ function Conference(props, ref) {
   const [videoMuted, setVideoMuted] = useState(false)
 
   const doCleanUp = async () => {
-    console.log("doCleanUp localStreamObj=", localStreamObj, ", localScreenObj=", localScreenObj)
+    // console.log("doCleanUp localStreamObj=", localStreamObj, ", localScreenObj=", localScreenObj)
     if (localStreamObj && localStreamObj.stream) {
       await unpublish(localStreamObj.stream)
 
@@ -27,7 +27,7 @@ function Conference(props, ref) {
       setLocalScreen(localScreenObj)
     }
  
-    console.log("doCleanUp streams=", streams)
+    // console.log("doCleanUp streams=", streams)
     streams.map(async item => {
       // await item.stream.unsubscribe();
     });
@@ -43,7 +43,7 @@ function Conference(props, ref) {
   };
 
   const unpublish = async (stream)=> {
-    console.log("stream.unpublish stream=", stream);
+    // console.log("stream.unpublish stream=", stream);
     if (stream) {
       await stopMediaStream(stream);
     }
@@ -90,10 +90,11 @@ function Conference(props, ref) {
     
     let _streams = JSON.parse(JSON.stringify(streams));
     rtc.ontrack = (track, stream) => {
-      console.log("got track", track.id, "for stream", stream.id);
-      if (track.kind === "video") {
+      // console.log("got track", track.id, "for stream", stream.id);
+      // ID Integration. Commenting out for disabling video
+      // if (track.kind === "video") {
+      if(track.kind === "audio"){
         track.onunmute = () => {
-
           let found = false
           _streams.forEach(item => {
             if (stream.id === item.id) {
@@ -103,9 +104,9 @@ function Conference(props, ref) {
 
           if (!found) {
             setTimeout(() => {
-              console.log("stream.id:::" + stream.id);
+              // console.log("stream.id:::" + stream.id);
               let name = 'Guest';
-              console.log("peers=", peers, "stream=", stream);
+              //console.log("peers=", peers, "stream=", stream);
               peers.forEach((item) => {
                 if (item["id"] == stream.id) {
                   name = item.name;
@@ -126,7 +127,7 @@ function Conference(props, ref) {
         };
 
         track.onmute = () => {
-          console.log("onmute:::" + stream.id);
+          //console.log("onmute:::" + stream.id);
           updateMuteStatus(stream, true);
         }
 
@@ -140,10 +141,12 @@ function Conference(props, ref) {
         resolution: settings.resolution,
         bandwidth: settings.bandwidth,
         audio: true,
-        video: true,
+        video: false,
+        // ID Integration Change
+        // video: true,
       })
         .then((media) => {
-          console.log("rtc.publish media=", media)
+          //console.log("rtc.publish media=", media)
           rtc.publish(media)
           localStreamObj.stream = media
           setLocalStream(localStreamObj)
@@ -159,7 +162,9 @@ function Conference(props, ref) {
       }
     }
 
-    doMuteMediaTrack("video", props.localVideoEnabled);
+    //doMuteMediaTrack("video", props.localVideoEnabled);
+
+    doMuteMediaTrack("audio", props.localVideoEnabled);
   }
 
 
@@ -174,7 +179,7 @@ function Conference(props, ref) {
   }
 
   const updateMuteStatus = (stream, muted) => {
-    console.log("updateMuteStatus stream=", stream, ", muted=", muted);
+    //console.log("updateMuteStatus stream=", stream, ", muted=", muted);
     setStreams((p)=>{
       return p.map(item=>{
         if (item.id == stream.id) {
@@ -213,18 +218,18 @@ function Conference(props, ref) {
   };
 
   const stopMediaStream = async (stream) => {
-    console.log("stopMediaStream stream=", stream);
+    //console.log("stopMediaStream stream=", stream);
     let tracks = stream.getTracks();
     for (let i = 0, len = tracks.length; i < len; i++) {
       await tracks[i].stop();
-      console.log("stopMediaStream track=", tracks[i]);
+      //console.log("stopMediaStream track=", tracks[i]);
     }
   };
 
   const onChangeVideoPosition = data => {
     let id = data.id;
     let index = data.index;
-    console.log("_onChangeVideoPosition id:" + id + "  index:" + index);
+    //console.log("_onChangeVideoPosition id:" + id + "  index:" + index);
 
     if (index == 0) {
       return;
@@ -250,7 +255,8 @@ function Conference(props, ref) {
 
   const { vidFit } = props;
   const id = props.uid;
-
+  // Not commenting any of the UI elements
+  // Since they are hidden under ID Editor UI
   return (
     <div className="conference-layout">
       {streams.length === 0 && (
@@ -258,6 +264,7 @@ function Conference(props, ref) {
           <Spin size="large" tip="Wait for other people joining ..." />
         </div>
       )}
+      {/* First Guest View */}
       {streams.map((item, index) => {
         return index == 0 ? (
           <MainVideoView key={item.id} id={item.id} stream={item.stream} vidFit={vidFit} muted={item.muted} />
@@ -265,6 +272,7 @@ function Conference(props, ref) {
           ""
         );
       })}
+      {/* Local Stream View */}
       {localStreamObj.stream && (
         <div className="conference-local-video-layout">
           <LocalVideoView
@@ -278,7 +286,8 @@ function Conference(props, ref) {
           />
         </div>
       )}
-      {localScreenObj.stream && (
+      {/* We are not using screensharing at the moment */}
+      {/* {localScreenObj.stream && (
         <div className="conference-local-screen-layout">
           <LocalVideoView
             key={id + "-screen"}
@@ -290,7 +299,8 @@ function Conference(props, ref) {
             videoType="localScreen"
           />
         </div>
-      )}
+      )} */}
+      {/* for other guest view */}
       <div className="small-video-list-div">
         <div className="small-video-list">
           {streams.map((item, index) => {
