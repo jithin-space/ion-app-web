@@ -1,89 +1,55 @@
-# ion-app-web
+# MapScreenShare
 
-ion web app
+MapScreenShare is a WebRTC based  application where multiple users can collaborate in editing a map. The project makes use 
 
-### Screenshots
+1. [ion](https://github.com/pion/ion)- For WebRTC 
+2. [ion-app-web](https://github.com/pion/ion-app-weba) - For Frontend UI
+3. [iD](https://github.com/openstreetmap/iD) - For Map Editing
+4. [React](https://github.com/facebook/react) - `ion-app-web` is based on react 
+5. [Antd](https://ant.design/) - `ion-app-web` uses ant.design for UI
 
-<img width="360" height="265" src=".github/screenshots/ion-01.jpg"/> <img width="360" height="265" src=".github/screenshots/ion-02.jpg"/>
-<img width="360" height="265" src=".github/screenshots/ion-04.jpg"/> <img width="360" height="265" src=".github/screenshots/ion-05.jpg"/>
 
-### Docker
+## Production Deployment
 
-Warning: **make sure ion is deployed by docker too**
-
-#### Local hosting and auto ssl
-
-Build docker image with production build of web app. erve on `https://localhost:9090`
-
-Biz websocket is proxied using caddy server and docker network from ion.
-You will need to ensure that src/App.jsx line 99 has the correct port for this proxy to work.
-
+1. Deploy `ion` using docker
+2. Clone this repository & `cd` to that repository
+3. Run `npm install`
+4. Make Changes to core iD file at `node_modules/@hotosm/id/dist/iD.js`
+    1. Dispatch Storage Change ( Critical for identifying draw changes)
+        1. search for `saved_history`
+        2. locate the `save` function
+        3. add this line `window.dispatchEvent(new Event('storage'))`
+    2. Dispatch PopState Event ( Critical for identifying item selection)
+        1. search for `window.replaceState`
+        2. add this line `window.dispatchEvent(new PopStateEvent('popstate'))`
+4. Run `npm run build`
+5. Run `cp -r static dist/` (essential for language translations & icons of iD)
+6. Run `cp static/land.html dist/` (for login redirect with login with OSM)
+8. Prepare Nginx Conf file with Following Section
 ```
-docker network create ionnet
-docker-compose -f docker-compose.yml up
-```
+    root /opt/ion-app-web/dist/;
+    index index.html index.htm index.nginx-debian.html;
 
-Chat: [https://localhost:9090](https://localhost:9090)
+    location /room.RoomSignal/ {
+            proxy_pass http://localhost:5551;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+    }
 
-Run this to rebuild when you modify the code
-```
-docker-compose -f docker-compose.yml up --build
-```
-
-#### Prod hosting and auto SSL
-
-Enable production ports and Caddy file for web service in `docker-compose.prod.yml`.
-
-Make sure these ports are exposed publicly
-
-```
-80/tcp
-443/tcp
-```
-
-Configure your domain/email in docker-compose.prod.yml
-
-```
-WWW_URL=yourdomain
-ADMIN_EMAIL=yourname@yourdomain
+    location /rtc.RTC/ {
+            proxy_pass http://localhost:5551;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+    }
 ```
 
-Verify that you're using the correct port on src/App.jsx on line 99 as you'll be using Caddy to proxy requests.
+## Development
 
-Bring up docker with
-
-```
-docker pull pionwebrtc/ion-app-web
-docker network create ionnet
-docker-compose -f docker-compose.prod.yml up
-```
-
-Chat: 
-
-```
-https://yourdomain
-```
-
-### Local Dev
-
-#### Setup
-
-Install node modules
-
-```
-npm i
-```
-
-#### Run
-
-Start dev server
-
-```
-npm start
-```
-
-Ensure that line 99 of src/App.jsx is pointed to :5551 since you can hit the SFU locally.
-
-Chat: [https://localhost:8080](https://localhost:8080)
+1. Change `webpack.config.js` file's `devserver` section.
+2. It is right now configured to work on internal ip and
+3. Connected to our public instance for testing without deploying ion locally
+4. Check `ion-app-web` deployment for customization 
 
 
